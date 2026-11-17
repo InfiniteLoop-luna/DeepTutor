@@ -11,6 +11,7 @@
   "paths": [
     "deeptutor/agents/question",
     "deeptutor/api/routers/practice.py",
+    "deeptutor/api/routers/question_bank_pdf.py",
     "deeptutor/api/routers/question.py",
     "deeptutor/api/routers/question_notebook.py",
     "deeptutor/tools/question"
@@ -89,6 +90,17 @@
       },
       "auth": "learning",
       "order": 695
+    },
+    {
+      "reference": "deeptutor.api.routers.question_bank_pdf:router",
+      "options": {
+        "prefix": "/api/question-notebook/practice/pdf-imports",
+        "tags": [
+          "practice"
+        ]
+      },
+      "auth": "learning",
+      "order": 696
     }
   ],
   "commands": [],

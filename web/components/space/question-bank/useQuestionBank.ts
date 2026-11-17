@@ -8,6 +8,7 @@ import {
   createCategory,
   deleteCategory,
   deleteNotebookEntry,
+  getTextbookCatalog,
   getQuestionBankStats,
   listCategories,
   listQuestionBankMaterials,
@@ -21,6 +22,7 @@ import {
   type QuestionBankMaterial,
   type AssessmentSource,
   type ScoreTrend,
+  type TextbookCatalog,
 } from "@/lib/notebook-api";
 
 /**
@@ -47,6 +49,11 @@ export interface ReviewFilters {
   source: AssessmentSource | "";
   materialId: string;
   scoreTrend: ScoreTrend | "";
+  textbookNode?: string;
+  questionType?: string;
+  difficulty?: string;
+  pdfSourceId?: string;
+  reviewStatus?: "wrong" | "unresolved" | "bookmarked" | "";
 }
 
 /** Build the question filter for the selected view. */
@@ -59,12 +66,25 @@ export function buildQuestionBankFilter(
   return {
     category_id: scope.kind === "category" ? scope.categoryId : undefined,
     uncategorized: scope.kind === "uncategorized" || undefined,
-    bookmarked: scope.kind === "bookmarked" ? true : undefined,
-    is_correct: scope.kind === "wrong" || scope.kind === "unresolved" ? false : undefined,
+    bookmarked:
+      scope.kind === "bookmarked" || filters.reviewStatus === "bookmarked" ? true : undefined,
+    mistakes_only:
+      scope.kind === "wrong" ||
+      scope.kind === "unresolved" ||
+      filters.reviewStatus === "wrong" ||
+      filters.reviewStatus === "unresolved" ||
+      undefined,
     source: filters.source || undefined,
     material_id: filters.materialId || undefined,
-    resolved: scope.kind === "unresolved" ? false : undefined,
+    resolved:
+      scope.kind === "unresolved" || filters.reviewStatus === "unresolved" ? false : undefined,
     score_trend: filters.scoreTrend || undefined,
+    textbook_section_id:
+      filters.textbookNode === "unassigned" ? undefined : filters.textbookNode || undefined,
+    textbook_unassigned: filters.textbookNode === "unassigned" || undefined,
+    question_type: filters.questionType || undefined,
+    difficulty: filters.difficulty || undefined,
+    pdf_source_id: filters.pdfSourceId || undefined,
     search: search || undefined,
     sort,
     limit: PAGE_SIZE,
@@ -77,6 +97,7 @@ export interface QuestionBankController {
   categories: NotebookCategory[];
   stats: QuestionBankStats;
   materials: QuestionBankMaterial[];
+  curriculum: TextbookCatalog | null;
   scope: BankScope;
   reviewFilters: ReviewFilters;
   sort: BankSort;
@@ -105,6 +126,7 @@ export interface QuestionBankController {
   // own UI decisions (keep the menu open, keep the typed name).
   toggleBookmark: (entry: NotebookEntry) => Promise<boolean>;
   toggleResolved: (entry: NotebookEntry) => Promise<boolean>;
+  assignTextbookSection: (entryId: number, sectionId: string) => Promise<boolean>;
   removeEntry: (entry: NotebookEntry) => Promise<boolean>;
   fileEntries: (ids: number[], categoryId: number) => Promise<boolean>;
   unfileEntries: (ids: number[], categoryId: number) => Promise<boolean>;
@@ -140,7 +162,7 @@ const EMPTY_FILTERS: ReviewFilters = {
  *    filing a question does not make the page jump.
  */
 export function useQuestionBank(
-  options: { mistakesOnly?: boolean } = {},
+  options: { mistakesOnly?: boolean; pdfSourceId?: string } = {},
 ): QuestionBankController {
   const mistakesOnly = options.mistakesOnly ?? false;
   const [page, setPage] = useState(0);
@@ -149,8 +171,12 @@ export function useQuestionBank(
   const [categories, setCategories] = useState<NotebookCategory[]>([]);
   const [stats, setStats] = useState<QuestionBankStats>(EMPTY_STATS);
   const [materials, setMaterials] = useState<QuestionBankMaterial[]>([]);
+  const [curriculum, setCurriculum] = useState<TextbookCatalog | null>(null);
   const [scope, setScopeState] = useState<BankScope>(DEFAULT_SCOPE);
-  const [reviewFilters, setReviewFiltersState] = useState<ReviewFilters>(EMPTY_FILTERS);
+  const [reviewFilters, setReviewFiltersState] = useState<ReviewFilters>(() => ({
+    ...EMPTY_FILTERS,
+    pdfSourceId: options.pdfSourceId,
+  }));
   const [sort, setSort] = useState<BankSort>("recent");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -178,9 +204,10 @@ export function useQuestionBank(
     if (loadedOnce.current) setRefreshing(true);
     setError(null);
     try {
+      const filter = buildQuestionBankFilter(scope, reviewFilters, search, sort);
       const response = await listNotebookEntries({
-        ...buildQuestionBankFilter(scope, reviewFilters, search, sort),
-        mistakes_only: mistakesOnly,
+        ...filter,
+        mistakes_only: mistakesOnly || filter.mistakes_only,
         offset: page * PAGE_SIZE,
       });
       if (seq !== requestSeq.current) return;
@@ -230,6 +257,18 @@ export function useQuestionBank(
     void loadMeta();
   }, [loadMeta]);
 
+  useEffect(() => {
+    let active = true;
+    void getTextbookCatalog()
+      .then(catalog => {
+        if (active) setCurriculum(catalog);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Selection is scoped to what is on screen: switching filters must not
   // leave invisible rows staged for a bulk action.
   const setScope = useCallback((next: BankScope) => {
@@ -239,6 +278,7 @@ export function useQuestionBank(
   }, []);
 
   const setReviewFilters = useCallback((next: ReviewFilters) => {
+    setSelectedIds(new Set());
     setPage(0);
     setReviewFiltersState(next);
   }, []);
@@ -309,6 +349,15 @@ export function useQuestionBank(
         await refresh();
       });
     },
+    [refresh, withPending],
+  );
+
+  const assignTextbookSection = useCallback(
+    async (entryId: number, sectionId: string) =>
+      withPending([entryId], async () => {
+        await updateNotebookEntry(entryId, { textbook_section_id: sectionId });
+        await refresh();
+      }),
     [refresh, withPending],
   );
 
@@ -433,6 +482,7 @@ export function useQuestionBank(
       categories,
       stats,
       materials,
+      curriculum,
       scope,
       reviewFilters,
       sort,
@@ -452,6 +502,7 @@ export function useQuestionBank(
       clearSelection,
       toggleBookmark,
       toggleResolved,
+      assignTextbookSection,
       removeEntry,
       fileEntries,
       unfileEntries,
@@ -468,6 +519,7 @@ export function useQuestionBank(
       categories,
       stats,
       materials,
+      curriculum,
       scope,
       reviewFilters,
       sort,
@@ -485,6 +537,7 @@ export function useQuestionBank(
       clearSelection,
       toggleBookmark,
       toggleResolved,
+      assignTextbookSection,
       removeEntry,
       fileEntries,
       unfileEntries,

@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { ArrowRight, CalendarCheck, Check, ClipboardList, FileUp, Loader2 } from "lucide-react";
 import { QuestionBankSection } from "@/components/space/question-bank";
+import QuestionBankPdfImport from "@/components/space/question-bank/QuestionBankPdfImport";
+import { PracticeSets } from "@/components/space/question-bank/PracticeSets";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
 import { practiceRoute, questionBankRoute } from "@/lib/learning-routes";
 import { getPracticeQueue, getPracticeSummary, type PracticeSummary } from "@/lib/practice-api";
@@ -14,6 +16,17 @@ import { PracticeImport } from "./PracticeImport";
 import { PracticeSession } from "./PracticeSession";
 import { PracticeInsights } from "./PracticeInsights";
 
+type CollectionView = "bank" | "mistakes" | "documents" | "sets";
+
+const LIBRARY_VIEWS: CollectionView[] = ["bank", "mistakes", "documents", "sets"];
+const PRACTICE_VIEWS: CollectionView[] = ["bank", "mistakes"];
+const VIEW_LABELS: Record<CollectionView, string> = {
+  bank: "Question Bank",
+  mistakes: "Mistakes",
+  documents: "Sources and import",
+  sets: "Practice sets",
+};
+
 /** Shared collections and imports; both surfaces can start a manual practice session. */
 export function PracticePage({ mode = "practice" }: { mode?: "practice" | "library" }) {
   const search = useSearchParams();
@@ -21,20 +34,28 @@ export function PracticePage({ mode = "practice" }: { mode?: "practice" | "libra
   return <PracticeCollectionPage mode={mode} initialImport={search.get("create") === "1"} />;
 }
 
-function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "library"; initialImport: boolean }) {
+function PracticeCollectionPage({
+  mode,
+  initialImport,
+}: {
+  mode: "practice" | "library";
+  initialImport: boolean;
+}) {
   const { t } = useTranslation();
   const libraryOnly = mode === "library";
   const pageRoute = libraryOnly ? questionBankRoute : practiceRoute;
   const router = useRouter();
   const search = useSearchParams();
-  const tab = search.get("view") === "mistakes" ? "mistakes" : "bank";
+  const views = libraryOnly ? LIBRARY_VIEWS : PRACTICE_VIEWS;
+  const tab = views.find(view => view === search.get("view")) ?? "bank";
+  const pdfSourceId = tab === "bank" ? (search.get("pdf_source") ?? undefined) : undefined;
   const [summary, setSummary] = useState<PracticeSummary | null>(null);
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(initialImport);
   const [notice, setNotice] = useState("");
   const [revision, setRevision] = useState(0);
   const [session, setSession] = useState<number[] | null>(() => {
-    const id = Number(search.get('question'));
+    const id = Number(search.get("question"));
     return Number.isSafeInteger(id) && id > 0 ? [id] : null;
   });
   const [starting, setStarting] = useState(false);
@@ -92,10 +113,20 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
       setStarting(false);
     }
   }
-  function switchTab(view: "bank" | "mistakes") {
+  function switchTab(view: CollectionView, pdfSource?: string) {
     const next = new URLSearchParams(search.toString());
     next.set("view", view);
+    if (pdfSource) next.set("pdf_source", pdfSource);
+    else next.delete("pdf_source");
+    next.delete("create");
+    next.delete("question");
+    setImportOpen(false);
     router.replace(pageRoute(next), { scroll: false });
+  }
+  function imported(message?: string) {
+    if (message) setNotice(message);
+    setRevision(value => value + 1);
+    void refresh();
   }
   return (
     <PracticePageShell
@@ -104,8 +135,11 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
         !session && (
           <button
             type="button"
-            onClick={() => setImportOpen(open => !open)}
-            aria-expanded={importOpen}
+            onClick={() => {
+              if (libraryOnly && tab !== "mistakes") switchTab("documents");
+              else setImportOpen(open => !open);
+            }}
+            aria-expanded={tab === "documents" || importOpen}
             className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium hover:bg-muted"
           >
             <FileUp size={16} />
@@ -115,7 +149,11 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
       }
     >
       {session ? (
-        <PracticeSession ids={session} onClose={closeSession} backLabel={libraryOnly ? t("Back to library") : undefined} />
+        <PracticeSession
+          ids={session}
+          onClose={closeSession}
+          backLabel={libraryOnly ? t("Back to library") : undefined}
+        />
       ) : (
         <>
           {notice && (
@@ -127,16 +165,14 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
               {notice}
             </div>
           )}
-          {importOpen && (
+          {importOpen && tab !== "documents" && (
             <PracticeImport
               key={tab}
-              initialTarget={tab}
+              initialTarget={tab === "mistakes" ? "mistakes" : "bank"}
               onClose={() => setImportOpen(false)}
               onImported={message => {
-                setNotice(message);
                 setImportOpen(false);
-                setRevision(value => value + 1);
-                void refresh();
+                imported(message);
               }}
             />
           )}
@@ -198,7 +234,7 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
               </div>
               <p className="mt-4 border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
                 {t(
-                  "New mistakes return the next day. Reviews adapt to your recall; overdue questions come first. Work in sets of up to 20."
+                  "New mistakes return the next day. Reviews adapt to your recall; overdue questions come first. Work in sets of up to 20.",
                 )}
               </p>
             </section>
@@ -206,9 +242,9 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
           <div
             role="tablist"
             aria-label={t("Practice collections")}
-            className="mb-5 flex gap-5 border-b border-border"
+            className="mb-5 flex gap-5 overflow-x-auto border-b border-border"
           >
-            {(["bank", "mistakes"] as const).map(view => (
+            {views.map((view, index) => (
               <button
                 key={view}
                 id={`practice-tab-${view}`}
@@ -219,37 +255,88 @@ function PracticeCollectionPage({ mode, initialImport }: { mode: "practice" | "l
                 onKeyDown={event => {
                   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
                     event.preventDefault();
-                    const next = view === "bank" ? "mistakes" : "bank";
+                    const direction = event.key === "ArrowLeft" ? -1 : 1;
+                    const next = views[(index + direction + views.length) % views.length];
                     switchTab(next);
                     document.getElementById(`practice-tab-${next}`)?.focus();
                   }
                 }}
                 aria-controls="practice-collection"
                 onClick={() => switchTab(view)}
-                className={`border-b-2 px-1 pb-3 text-sm ${tab === view ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                className={`shrink-0 whitespace-nowrap border-b-2 px-1 pb-3 text-sm ${tab === view ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
-                {view === "bank" ? t("Question Bank") : t("Mistakes")}
-                <span className="ml-2 text-xs tabular-nums text-muted-foreground">
-                  {summary ? (view === "bank" ? summary.total : summary.mistakes) : "—"}
-                </span>
+                {t(VIEW_LABELS[view])}
+                {(view === "bank" || view === "mistakes") && (
+                  <span className="ml-2 text-xs tabular-nums text-muted-foreground">
+                    {summary ? (view === "bank" ? summary.total : summary.mistakes) : "—"}
+                  </span>
+                )}
               </button>
             ))}
           </div>
           <div id="practice-collection" role="tabpanel" aria-labelledby={`practice-tab-${tab}`}>
-            <QuestionBankSection
-              key={`${tab}:${revision}`}
-              embedded
-              onChanged={refresh}
-              mistakesOnly={tab === "mistakes"}
-              onPractice={ids => {
-                setSession(ids);
-                setNotice("");
-              }}
-            />
+            {tab === "documents" ? (
+              <QuestionBankImportWorkspace
+                onImported={imported}
+                onBrowseSource={id => switchTab("bank", id)}
+              />
+            ) : tab === "sets" ? (
+              <PracticeSets onStart={setSession} />
+            ) : (
+              <QuestionBankSection
+                key={`${tab}:${revision}:${pdfSourceId ?? ""}`}
+                embedded
+                onChanged={refresh}
+                mistakesOnly={tab === "mistakes"}
+                pdfSourceId={pdfSourceId}
+                onClearPdfSource={() => switchTab("bank")}
+                onPractice={ids => {
+                  setSession(ids);
+                  setNotice("");
+                }}
+              />
+            )}
           </div>
         </>
       )}
     </PracticePageShell>
+  );
+}
+
+function QuestionBankImportWorkspace({
+  onImported,
+  onBrowseSource,
+}: {
+  onImported: (message?: string) => void;
+  onBrowseSource: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [structured, setStructured] = useState(false);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        {([false, true] as const).map(value => (
+          <button
+            type="button"
+            key={String(value)}
+            aria-pressed={value === structured}
+            onClick={() => setStructured(value)}
+            className={`rounded-lg border px-3 py-1.5 text-sm ${value === structured ? "border-primary/30 bg-primary/10 font-medium text-primary" : "border-border hover:bg-muted"}`}
+          >
+            {t(value ? "Spreadsheet or JSON" : "PDF sources")}
+          </button>
+        ))}
+      </div>
+      {structured ? (
+        <PracticeImport
+          initialTarget="bank"
+          onClose={() => setStructured(false)}
+          onImported={onImported}
+        />
+      ) : (
+        <QuestionBankPdfImport onImported={() => onImported()} onBrowseSource={onBrowseSource} />
+      )}
+    </div>
   );
 }
 
@@ -269,7 +356,9 @@ function PracticePageShell({
       <>
         <SpaceSectionHeader
           title={t("Question Bank")}
-          description={t("Questions from every source, together with your own imports.")}
+          description={t(
+            "Browse textbook chapters, review source documents, and put together practice sets.",
+          )}
           action={action}
         />
         {children}

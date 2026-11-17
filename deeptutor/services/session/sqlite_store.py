@@ -24,6 +24,7 @@ from deeptutor.core.assessment import (
     QUESTION_ORIGIN_TYPES,
 )
 from deeptutor.services.path_service import get_path_service
+from deeptutor.services.practice.curriculum import textbook_section_from_legacy_tags
 from deeptutor.services.session.protocol import (
     SUBMISSION_ASSISTANT_FIELD,
     SUBMISSION_PREVIOUS_TURN_FIELD,
@@ -194,7 +195,12 @@ class QuestionBankQuery:
     is_correct: bool | None = None
     source: str = ""
     material_id: str = ""
+    pdf_source_id: str = ""
     section_id: str = ""
+    textbook_section_id: str = ""
+    textbook_unassigned: bool = False
+    question_type: str = ""
+    difficulty: str = ""
     assessment_type: str = ""
     result: str = ""
     mastery_path_id: str = ""
@@ -220,7 +226,12 @@ class QuestionBankQuery:
             if (self.source or "").strip() in ASSESSMENT_SOURCES
             else "",
             material_id=(self.material_id or "").strip(),
+            pdf_source_id=(self.pdf_source_id or "").strip(),
             section_id=(self.section_id or "").strip(),
+            textbook_section_id=(self.textbook_section_id or "").strip(),
+            textbook_unassigned=self.textbook_unassigned,
+            question_type=(self.question_type or "").strip().lower(),
+            difficulty=(self.difficulty or "").strip().lower(),
             assessment_type=(self.assessment_type or "").strip()
             if (self.assessment_type or "").strip() in ASSESSMENT_TYPES
             else "",
@@ -520,6 +531,7 @@ class SQLiteSessionStore:
             self._migrate_notebook_entries_add_assessment_review(conn)
             self._migrate_notebook_entries_add_assessment_v2(conn)
             self._migrate_notebook_entry_origins(conn)
+            self._migrate_notebook_textbook_sections(conn)
             self._migrate_assessment_attempt_origins(conn)
             self._migrate_assessment_attempt_link_state(conn)
             self._migrate_turn_runtime_columns(conn)
@@ -527,6 +539,38 @@ class SQLiteSessionStore:
 
             initialize_practice(conn)
             conn.commit()
+
+    @staticmethod
+    def _migrate_notebook_textbook_sections(conn: sqlite3.Connection) -> None:
+        if any(
+            row[1] == "textbook_section_id"
+            for row in conn.execute("PRAGMA table_info(notebook_entries)")
+        ):
+            return
+        # NULL denotes an entry never classified. An explicit empty value keeps
+        # a learner's decision to clear a section across subsequent imports.
+        conn.execute("SAVEPOINT textbook_sections")
+        conn.execute("ALTER TABLE notebook_entries ADD COLUMN textbook_section_id TEXT")
+        legacy_tags: dict[int, list[str]] = {}
+        for entry_id, tag in conn.execute("""
+            SELECT link.entry_id, category.name
+            FROM notebook_entry_categories link
+            JOIN notebook_categories category ON category.id = link.category_id
+            WHERE category.name GLOB '教材·*'
+        """):
+            legacy_tags.setdefault(entry_id, []).append(tag)
+        conn.executemany(
+            "UPDATE notebook_entries SET textbook_section_id = ? WHERE id = ?",
+            (
+                (section_id, entry_id)
+                for entry_id, tags in legacy_tags.items()
+                if (section_id := textbook_section_from_legacy_tags(tags))
+            ),
+        )
+        conn.execute(
+            "CREATE INDEX idx_notebook_entries_textbook ON notebook_entries(textbook_section_id)"
+        )
+        conn.execute("RELEASE textbook_sections")
 
     @staticmethod
     def _migrate_workspace_preferences(conn: sqlite3.Connection) -> int:
@@ -4080,6 +4124,10 @@ class SQLiteSessionStore:
             "material_title": (row["material_title"] or "") if "material_title" in keys else "",
             "section_id": (row["section_id"] or "") if "section_id" in keys else "",
             "section_title": (row["section_title"] or "") if "section_title" in keys else "",
+            "textbook_section_id": (row["textbook_section_id"] or "")
+            if "textbook_section_id" in keys
+            else "",
+            "pdf_sources": [],
             "score_trend": (row["score_trend"] or "new") if "score_trend" in keys else "new",
             "assessment_type": assessment_type,
             "result": result,
@@ -4165,9 +4213,30 @@ class SQLiteSessionStore:
         if query.material_id:
             conditions.append("n.material_id = ?")
             params.append(query.material_id)
+        if query.pdf_source_id:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM practice_pdf_sources p "
+                "WHERE p.entry_id = n.id AND p.document_id = ?)"
+            )
+            params.append(query.pdf_source_id)
         if query.section_id:
             conditions.append("n.section_id = ?")
             params.append(query.section_id)
+        if query.textbook_section_id:
+            section_id = query.textbook_section_id
+            separator = "." if "-" in section_id else "-"
+            conditions.append(
+                "(n.textbook_section_id = ? OR n.textbook_section_id LIKE ? ESCAPE '\\')"
+            )
+            params.extend([section_id, f"{_escape_like(section_id)}{separator}%"])
+        elif query.textbook_unassigned:
+            conditions.append("(n.textbook_section_id IS NULL OR n.textbook_section_id = '')")
+        if query.question_type:
+            conditions.append("LOWER(TRIM(n.question_type)) = ?")
+            params.append(query.question_type)
+        if query.difficulty:
+            conditions.append("LOWER(TRIM(n.difficulty)) = ?")
+            params.append(query.difficulty)
         if query.resolved is not None:
             conditions.append("n.resolved = ?")
             params.append(1 if query.resolved else 0)
@@ -4241,6 +4310,8 @@ class SQLiteSessionStore:
         return {int(row["entry_id"]): dict(row) for row in rows}
 
     def _list_notebook_entries_sync(self, query: QuestionBankQuery) -> dict[str, Any]:
+        from deeptutor.services.practice.pdf_import import pdf_sources_for_entries
+
         query = query.normalized()
         join_sql, where_sql, params = self._question_bank_filters(query)
         order = "ASC" if query.sort == "oldest" else "DESC"
@@ -4252,6 +4323,7 @@ class SQLiteSessionStore:
                 n.correct_answer, n.explanation, n.difficulty,
                 n.user_answer, n.user_answer_images_json, n.source, n.material_id,
                 n.material_title, n.section_id, n.section_title, n.score_trend,
+                n.textbook_section_id,
                 n.assessment_type, n.result, n.mastery_path_id, n.knowledge_point_id,
                 n.attempt_count, n.hints_used, n.confidence, n.response_time, n.quality,
                 n.is_correct, n.resolved, n.bookmarked,
@@ -4275,11 +4347,15 @@ class SQLiteSessionStore:
                 tuple(params) + (query.limit, query.offset),
             ).fetchall()
             items = [self._serialize_notebook_entry(r) for r in rows]
-            grouped = self._load_categories_for(conn, [int(i["id"]) for i in items])
-            practice = self._load_practice_for(conn, [int(i["id"]) for i in items])
+            entry_ids = [int(item["id"]) for item in items]
+            grouped = self._load_categories_for(conn, entry_ids)
+            practice = self._load_practice_for(conn, entry_ids)
+            pdf_sources = pdf_sources_for_entries(conn, entry_ids)
         for item in items:
-            item["categories"] = grouped.get(int(item["id"]), [])
-            item["practice"] = practice.get(int(item["id"]))
+            entry_id = int(item["id"])
+            item["categories"] = grouped.get(entry_id, [])
+            item["practice"] = practice.get(entry_id)
+            item["pdf_sources"] = pdf_sources.get(entry_id, [])
         return {"items": items, "total": total}
 
     async def list_notebook_navigation(self) -> list[dict[str, Any]]:
@@ -4316,7 +4392,12 @@ class SQLiteSessionStore:
         session_ids: Sequence[str] | None = None,
         source: str = "",
         material_id: str = "",
+        pdf_source_id: str = "",
         section_id: str = "",
+        textbook_section_id: str = "",
+        textbook_unassigned: bool = False,
+        question_type: str = "",
+        difficulty: str = "",
         assessment_type: str = "",
         result: str = "",
         mastery_path_id: str = "",
@@ -4339,7 +4420,12 @@ class SQLiteSessionStore:
                 is_correct=is_correct,
                 source=source,
                 material_id=material_id,
+                pdf_source_id=pdf_source_id,
                 section_id=section_id,
+                textbook_section_id=textbook_section_id,
+                textbook_unassigned=textbook_unassigned,
+                question_type=question_type,
+                difficulty=difficulty,
                 assessment_type=assessment_type,
                 result=result,
                 mastery_path_id=mastery_path_id,
@@ -4466,6 +4552,8 @@ class SQLiteSessionStore:
         )
 
     def _get_notebook_entry_sync(self, entry_id: int) -> dict[str, Any] | None:
+        from deeptutor.services.practice.pdf_import import pdf_sources_for_entries
+
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -4481,6 +4569,7 @@ class SQLiteSessionStore:
                 return None
             entry = self._serialize_notebook_entry(row)
             entry["practice"] = self._load_practice_for(conn, [entry_id]).get(entry_id)
+            entry["pdf_sources"] = pdf_sources_for_entries(conn, [entry_id]).get(entry_id, [])
             cats = conn.execute(
                 """
                 SELECT c.id, c.name
@@ -4531,6 +4620,8 @@ class SQLiteSessionStore:
         question_id: str,
         turn_id: str | None = None,
     ) -> dict[str, Any] | None:
+        from deeptutor.services.practice.pdf_import import pdf_sources_for_entries
+
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -4544,9 +4635,13 @@ class SQLiteSessionStore:
                 """,
                 (origin_type, origin_ref, turn_id if turn_id is not None else "", question_id),
             ).fetchone()
-        if row is None:
-            return None
-        return self._serialize_notebook_entry(row)
+            if row is None:
+                return None
+            entry = self._serialize_notebook_entry(row)
+            if entry["source"] == "import":
+                entry_id = int(entry["id"])
+                entry["pdf_sources"] = pdf_sources_for_entries(conn, [entry_id]).get(entry_id, [])
+            return entry
 
     async def find_notebook_entry_by_origin(
         self,
@@ -4571,11 +4666,13 @@ class SQLiteSessionStore:
             "is_correct",
             "ai_judgment",
             "resolved",
+            "textbook_section_id",
         }
         fields = {k: v for k, v in updates.items() if k in allowed}
         if not fields:
             return False
-        fields["updated_at"] = time.time()
+        if fields.keys() != {"textbook_section_id"}:
+            fields["updated_at"] = time.time()
         if "bookmarked" in fields:
             fields["bookmarked"] = 1 if fields["bookmarked"] else 0
         if "is_correct" in fields:

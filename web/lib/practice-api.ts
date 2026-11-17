@@ -78,10 +78,23 @@ function params(): string {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   }).toString()
 }
-export const getPracticeSummary = () =>
-  request<PracticeSummary>(`/summary?${params()}`)
-export const getPracticeQueue = () =>
-  request<PracticeQuestion[]>(`/queue?${params()}`)
+export const getPracticeSummary = () => request<PracticeSummary>(`/summary?${params()}`)
+export const getPracticeQueue = () => request<PracticeQuestion[]>(`/queue?${params()}`)
+export interface SavedPracticeSet {
+  id: string
+  name: string
+  entry_ids: number[]
+}
+export const listPracticeSets = () => request<SavedPracticeSet[]>('/sets')
+export const createPracticeSet = (name: string, entryIds: number[]) =>
+  request<SavedPracticeSet>('/sets', json({ name, entry_ids: entryIds }))
+export const renamePracticeSet = (id: string, name: string) =>
+  request<{ updated: boolean }>(`/sets/${encodeURIComponent(id)}`, {
+    ...json({ name }),
+    method: 'PATCH',
+  })
+export const deletePracticeSet = (id: string) =>
+  request<{ deleted: boolean }>(`/sets/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getPracticeQuestion = (id: number, workspaceId?: string) =>
   request<PracticeQuestion>(`/questions/${id}`, undefined, workspaceId)
 export const checkPracticeAnswer = (id: number, answer: string, workspaceId?: string) =>

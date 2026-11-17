@@ -1,5 +1,5 @@
 {
-  "fingerprint": "b3ff4a2963d642a226ba3b8fd034f616c878ec27cdb071e720e82674dabd3b75",
+  "fingerprint": "ea6bf822a4b2984e63efdebf009fb35d587985133ecad4fbca15e0e1be5ba9ab",
   "routers": {
     "deeptutor.api.routers.auth:router": [
       {
@@ -3268,6 +3268,14 @@
         ]
       },
       {
+        "path": "/curriculum",
+        "name": "list_curriculum",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
         "path": "/entries",
         "name": "list_entries",
         "kind": "http",
@@ -3382,6 +3390,38 @@
     ],
     "deeptutor.api.routers.practice:router": [
       {
+        "path": "/sets",
+        "name": "list_sets",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "/sets",
+        "name": "create_set",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/sets/{set_id}",
+        "name": "rename_set",
+        "kind": "http",
+        "methods": [
+          "PATCH"
+        ]
+      },
+      {
+        "path": "/sets/{set_id}",
+        "name": "delete_set",
+        "kind": "http",
+        "methods": [
+          "DELETE"
+        ]
+      },
+      {
         "path": "/summary",
         "name": "summary",
         "kind": "http",
@@ -3448,6 +3488,56 @@
       {
         "path": "/import/commit",
         "name": "import_commit",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      }
+    ],
+    "deeptutor.api.routers.question_bank_pdf:router": [
+      {
+        "path": "",
+        "name": "list_pdf_imports",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "",
+        "name": "upload_pdf",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{source_id}",
+        "name": "read_pdf_import",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "/{source_id}/source",
+        "name": "read_pdf_source",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "/{source_id}",
+        "name": "save_pdf_review",
+        "kind": "http",
+        "methods": [
+          "PUT"
+        ]
+      },
+      {
+        "path": "/{source_id}/commit",
+        "name": "commit_pdf_review",
         "kind": "http",
         "methods": [
           "POST"

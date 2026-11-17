@@ -6,16 +6,17 @@ import asyncio
 import csv
 import io
 import time
-from typing import Literal
+from typing import Annotated, Literal
 import zipfile
 
 from defusedxml.ElementTree import ParseError
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from deeptutor.services.practice.answers import check_answer
 from deeptutor.services.practice.importing import MAX_BYTES, preview
 from deeptutor.services.practice.scheduler import Rating, day_bounds
+from deeptutor.services.practice.sets import PracticeSetStore
 from deeptutor.services.practice.storage import PracticeStore, ReviewConflict
 from deeptutor.services.session import get_sqlite_session_store
 
@@ -80,6 +81,50 @@ class ReviewRequest(AnswerRequest):
 
 class CommitRequest(BaseModel):
     token: str = Field(min_length=32, max_length=32, pattern=r"^[a-f0-9]+$")
+
+
+class PracticeSetName(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
+class CreatePracticeSet(PracticeSetName):
+    entry_ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=200)
+
+
+class SavedPracticeSet(PracticeSetName):
+    id: str
+    entry_ids: list[int]
+
+
+def _practice_sets() -> PracticeSetStore:
+    return PracticeSetStore(get_sqlite_session_store().db_path)
+
+
+@router.get("/sets", response_model=list[SavedPracticeSet])
+async def list_sets():
+    return await asyncio.to_thread(_practice_sets().list_sets)
+
+
+@router.post("/sets", response_model=SavedPracticeSet, status_code=201)
+async def create_set(payload: CreatePracticeSet):
+    try:
+        return await asyncio.to_thread(_practice_sets().create_set, payload.name, payload.entry_ids)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.patch("/sets/{set_id}")
+async def rename_set(set_id: str, payload: PracticeSetName):
+    if not await asyncio.to_thread(_practice_sets().rename_set, set_id, payload.name):
+        raise HTTPException(404, "Practice set not found")
+    return {"updated": True}
+
+
+@router.delete("/sets/{set_id}")
+async def delete_set(set_id: str):
+    if not await asyncio.to_thread(_practice_sets().delete_set, set_id):
+        raise HTTPException(404, "Practice set not found")
+    return {"deleted": True}
 
 
 def _validate_timezone(timezone: str) -> tuple[float, float]:

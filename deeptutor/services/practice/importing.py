@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import zipfile
 
+from .curriculum import is_textbook_section_id, textbook_section_from_legacy_tags
+
 MAX_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 500
 MAX_CELL = 20000
@@ -21,6 +23,7 @@ ALIASES = {
     "explanation": ("explanation", "解析"),
     "difficulty": ("difficulty", "难度"),
     "tags": ("tags", "标签", "分类"),
+    "textbook_section_id": ("textbook_section_id", "教材节次ID"),
     "user_answer": ("user_answer", "我的答案", "作答"),
     "options": ("options", "选项"),
 }
@@ -178,6 +181,9 @@ def normalize_question(raw: dict) -> dict:
     tags = list(dict.fromkeys(_cell(tag) for tag in tags if _cell(tag)))
     if len(tags) > 20 or any(len(tag) > 100 for tag in tags):
         raise ValueError("Use at most 20 tags, each up to 100 characters")
+    section_id = _cell(fields["textbook_section_id"])
+    if section_id and not is_textbook_section_id(section_id):
+        raise ValueError("Unknown textbook section ID")
     result = dict(
         question=question,
         question_type=kind,
@@ -187,6 +193,7 @@ def normalize_question(raw: dict) -> dict:
         difficulty=_cell(fields["difficulty"]),
         user_answer=_cell(fields["user_answer"]),
         tags=tags,
+        textbook_section_id=section_id or textbook_section_from_legacy_tags(tags),
     )
     identity = {
         key: result[key] for key in ("question", "question_type", "options", "correct_answer")

@@ -5,21 +5,35 @@ import { buildQuestionBankFilter } from "@/components/space/question-bank/useQue
 
 test("the unresolved view combines wrong answers with review state", () => {
   const filter = buildQuestionBankFilter(
-    { kind: "unresolved" },
-    { source: "mastery_path", materialId: "path-1", scoreTrend: "declined" },
+    { kind: "category", categoryId: 3 },
+    {
+      source: "mastery_path",
+      materialId: "path-1",
+      scoreTrend: "declined",
+      reviewStatus: "unresolved",
+      textbookNode: "b1-4.3",
+      questionType: "single_choice",
+      difficulty: "hard",
+      pdfSourceId: "document-id",
+    },
     "equation",
     "oldest",
   );
 
   assert.deepEqual(filter, {
-    category_id: undefined,
+    category_id: 3,
     uncategorized: undefined,
     bookmarked: undefined,
-    is_correct: false,
+    mistakes_only: true,
     source: "mastery_path",
     material_id: "path-1",
     resolved: false,
     score_trend: "declined",
+    textbook_section_id: "b1-4.3",
+    textbook_unassigned: undefined,
+    question_type: "single_choice",
+    difficulty: "hard",
+    pdf_source_id: "document-id",
     search: "equation",
     sort: "oldest",
     limit: 60,

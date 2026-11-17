@@ -14,6 +14,12 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field, model_validator
 
 from deeptutor.core.assessment import AssessmentResult, AssessmentSource, QuestionOriginType
+from deeptutor.services.practice.curriculum import (
+    Curriculum,
+    get_curriculum,
+    is_textbook_node_id,
+    is_textbook_section_id,
+)
 from deeptutor.services.session import get_sqlite_session_store
 from deeptutor.services.storage import get_attachment_store
 
@@ -45,6 +51,14 @@ class CategoryItem(BaseModel):
     entry_count: int = 0
 
 
+class PdfSourceItem(BaseModel):
+    document_id: str
+    filename: str
+    page: int
+    end_page: int
+    number: str
+
+
 class NotebookEntryItem(BaseModel):
     id: int
     session_id: str = ""
@@ -66,6 +80,8 @@ class NotebookEntryItem(BaseModel):
     material_title: str = ""
     section_id: str = ""
     section_title: str = ""
+    textbook_section_id: str = ""
+    pdf_sources: list[PdfSourceItem] = Field(default_factory=list)
     score_trend: ScoreTrend = "new"
     assessment_type: str = ""
     result: AssessmentResult | str = ""
@@ -97,6 +113,15 @@ class EntryUpdateRequest(BaseModel):
     followup_session_id: str | None = None
     ai_judgment: str | None = None
     resolved: bool | None = None
+    textbook_section_id: str | None = Field(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_textbook_section(self) -> "EntryUpdateRequest":
+        if self.textbook_section_id is not None:
+            self.textbook_section_id = self.textbook_section_id.strip()
+            if self.textbook_section_id and not is_textbook_section_id(self.textbook_section_id):
+                raise ValueError("Unknown textbook section ID")
+        return self
 
 
 class CategoryCreateRequest(BaseModel):
@@ -321,6 +346,11 @@ async def upsert_single_entry(payload: UpsertEntryRequest):
     return entry
 
 
+@router.get("/curriculum", response_model=Curriculum)
+async def list_curriculum() -> Curriculum:
+    return get_curriculum()
+
+
 @router.get("/entries", response_model=NotebookEntryListResponse)
 async def list_entries(
     category_id: int | None = Query(default=None),
@@ -334,7 +364,12 @@ async def list_entries(
     is_correct: bool | None = Query(default=None),
     source: AssessmentSource | Literal[""] = Query(default=""),
     material_id: str = Query(default="", max_length=500),
+    pdf_source_id: str = Query(default="", max_length=100),
     section_id: str = Query(default="", max_length=500),
+    textbook_section_id: str = Query(default="", max_length=50),
+    textbook_unassigned: bool = Query(default=False),
+    question_type: str = Query(default="", max_length=50),
+    difficulty: str = Query(default="", max_length=50),
     assessment_type: str = Query(default="", pattern="^(quiz|focus_check|qualitative|review)?$"),
     result: str = Query(default="", pattern="^(correct|incorrect|partial|ungraded)?$"),
     mastery_path_id: str = Query(default="", max_length=500),
@@ -346,6 +381,11 @@ async def list_entries(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> NotebookEntryListResponse:
+    textbook_section_id = textbook_section_id.strip()
+    if textbook_section_id and not is_textbook_node_id(textbook_section_id):
+        raise HTTPException(
+            status_code=422, detail="Unknown textbook volume, chapter or section ID"
+        )
     store = get_sqlite_session_store()
     listing = await store.list_notebook_entries(
         category_id=category_id,
@@ -355,7 +395,12 @@ async def list_entries(
         is_correct=is_correct,
         source=source,
         material_id=material_id,
+        pdf_source_id=pdf_source_id,
         section_id=section_id,
+        textbook_section_id=textbook_section_id,
+        textbook_unassigned=textbook_unassigned,
+        question_type=question_type,
+        difficulty=difficulty,
         assessment_type=assessment_type,
         result=result,
         mastery_path_id=mastery_path_id,

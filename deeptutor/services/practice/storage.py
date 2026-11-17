@@ -9,6 +9,7 @@ import sqlite3
 import time
 import uuid
 
+from .curriculum import textbook_section_from_legacy_tags
 from .scheduler import DAY, Rating, day_bounds, schedule
 
 # Legacy correct or manually mastered questions start with a three-day interval.
@@ -23,6 +24,9 @@ class ReviewConflict(ValueError):
 
 
 def initialize_practice(conn: sqlite3.Connection) -> None:
+    from .pdf_import import initialize_pdf_imports
+
+    initialize_pdf_imports(conn)
     existing = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE name='practice_review_state'"
     ).fetchone()
@@ -337,69 +341,100 @@ class PracticeStore:
                 raise ValueError("Import preview expired. Select the file again.")
             payload = json.loads(staged["payload_json"])
             questions = payload if isinstance(payload, list) else payload["questions"]
-            # All practice-file imports share one durable origin namespace.
-            # ``question_id`` is a content hash, so re-importing the same
-            # question remains idempotent without tying ownership to an
-            # ephemeral preview receipt or a synthetic chat session.
-            origin_ref = "practice-import"
-            created, skipped = 0, 0
-            for question in questions:
-                cursor = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO notebook_entries(
-                        session_id, origin_type, origin_ref, question_id, question, question_type,
-                        options_json, correct_answer, explanation, difficulty, user_answer, source,
-                        result, assessment_type, created_at, updated_at, material_title, material_id)
-                    VALUES(NULL, 'external_import', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, 'quiz', ?, ?, ?, ?)
-                """,
-                    (
-                        origin_ref,
-                        question["question_id"],
-                        question["question"],
-                        question["question_type"],
-                        json.dumps(question["options"], ensure_ascii=False),
-                        question["correct_answer"],
-                        question["explanation"],
-                        question["difficulty"],
-                        question["user_answer"],
-                        "incorrect" if staged["target"] == "mistakes" else "ungraded",
-                        now,
-                        now,
-                        staged["filename"],
-                        "import:" + token,
-                    ),
-                )
-                created += cursor.rowcount
-                skipped += 1 - cursor.rowcount
-                entry_id = conn.execute(
-                    """SELECT id FROM notebook_entries
-                    WHERE origin_type='external_import' AND origin_ref=?
-                      AND question_id=? AND turn_id=''""",
-                    (origin_ref, question["question_id"]),
-                ).fetchone()[0]
-                if staged["target"] == "mistakes":
-                    conn.execute(
-                        "INSERT OR IGNORE INTO practice_review_state(entry_id, first_wrong_at, due_at) VALUES(?, ?, ?)",
-                        (entry_id, now, now + DAY),
-                    )
-                    conn.execute(
-                        """UPDATE practice_review_state SET is_mistake=1, first_wrong_at=?,
-                            due_at=?, interval_days=1, version=version+1
-                            WHERE entry_id=? AND is_mistake=0""",
-                        (now, now + DAY, entry_id),
-                    )
-                for tag in question["tags"]:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO notebook_categories(name, created_at) VALUES(?, ?)",
-                        (tag, now),
-                    )
-                    conn.execute(
-                        "INSERT OR IGNORE INTO notebook_entry_categories(entry_id, category_id) SELECT ?, id FROM notebook_categories WHERE name=?",
-                        (entry_id, tag),
-                    )
+            outcomes = self._apply_import(
+                conn,
+                questions,
+                staged["filename"],
+                staged["target"],
+                "import:" + token,
+                now,
+            )
+            created = sum(created for _, created in outcomes)
+            skipped = len(outcomes) - created
             result = {"created": created, "duplicates": skipped, "total": created + skipped}
             conn.execute(
                 "UPDATE practice_imports SET result_json=?, payload_json='[]' WHERE token=?",
                 (json.dumps(result), token),
             )
         return result
+
+    @staticmethod
+    def _apply_import(
+        conn: sqlite3.Connection,
+        questions: list[dict],
+        filename: str,
+        target: str,
+        material_id: str,
+        now: float,
+    ) -> list[tuple[int, bool]]:
+        # All practice-file imports share one durable origin namespace.
+        # ``question_id`` is a content hash, so re-importing the same
+        # question remains idempotent without tying ownership to an
+        # ephemeral preview receipt or a synthetic chat session.
+        origin_ref = "practice-import"
+        outcomes = []
+        for question in questions:
+            section_id = question.get("textbook_section_id") or textbook_section_from_legacy_tags(
+                question["tags"]
+            )
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO notebook_entries(
+                    session_id, origin_type, origin_ref, question_id, question, question_type,
+                    options_json, correct_answer, explanation, difficulty, user_answer, source,
+                    result, assessment_type, created_at, updated_at, material_title,
+                    material_id, textbook_section_id)
+                VALUES(NULL, 'external_import', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, 'quiz', ?, ?, ?, ?, ?)
+            """,
+                (
+                    origin_ref,
+                    question["question_id"],
+                    question["question"],
+                    question["question_type"],
+                    json.dumps(question["options"], ensure_ascii=False),
+                    question["correct_answer"],
+                    question["explanation"],
+                    question["difficulty"],
+                    question["user_answer"],
+                    "incorrect" if target == "mistakes" else "ungraded",
+                    now,
+                    now,
+                    filename,
+                    material_id,
+                    section_id,
+                ),
+            )
+            entry_id = conn.execute(
+                """SELECT id FROM notebook_entries
+                WHERE origin_type='external_import' AND origin_ref=?
+                  AND question_id=? AND turn_id=''""",
+                (origin_ref, question["question_id"]),
+            ).fetchone()[0]
+            if not cursor.rowcount and section_id:
+                conn.execute(
+                    "UPDATE notebook_entries SET textbook_section_id=? "
+                    "WHERE id=? AND textbook_section_id IS NULL",
+                    (section_id, entry_id),
+                )
+            if target == "mistakes":
+                conn.execute(
+                    "INSERT OR IGNORE INTO practice_review_state(entry_id, first_wrong_at, due_at) VALUES(?, ?, ?)",
+                    (entry_id, now, now + DAY),
+                )
+                conn.execute(
+                    """UPDATE practice_review_state SET is_mistake=1, first_wrong_at=?,
+                        due_at=?, interval_days=1, version=version+1
+                        WHERE entry_id=? AND is_mistake=0""",
+                    (now, now + DAY, entry_id),
+                )
+            for tag in question["tags"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO notebook_categories(name, created_at) VALUES(?, ?)",
+                    (tag, now),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO notebook_entry_categories(entry_id, category_id) SELECT ?, id FROM notebook_categories WHERE name=?",
+                    (entry_id, tag),
+                )
+            outcomes.append((entry_id, bool(cursor.rowcount)))
+        return outcomes

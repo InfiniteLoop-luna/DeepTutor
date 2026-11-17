@@ -76,6 +76,66 @@ def test_ungraded_imports_are_not_mistakes_and_review_preserves_original(bank):
     assert client.get("/bank/entries?mistakes_only=true").json()["total"] == 1
 
 
+def test_practice_sets_preserve_order_and_only_include_available_entries(bank):
+    store, _, client = bank
+    first = seed(store)["id"]
+    second = seed(store, question_id="q2")["id"]
+    url = "/practice/sets"
+    assert client.post(url, json={"name": "Missing", "entry_ids": [first, 9999]}).status_code == 404
+    assert client.get(url).json() == []
+
+    created = client.post(url, json={"name": "  Logarithms ", "entry_ids": [second, first, first]})
+    assert created.status_code == 201
+    item = created.json()
+    assert item["name"] == "Logarithms"
+    assert item["entry_ids"] == [second, first]
+    item_url = f"{url}/{item['id']}"
+    assert client.patch(item_url, json={"name": "Exam review"}).status_code == 200
+    assert client.delete(f"/bank/entries/{second}").status_code == 200
+    assert client.get(url).json() == [{**item, "name": "Exam review", "entry_ids": [first]}]
+    assert client.delete(item_url).status_code == 200
+    assert client.get(url).json() == []
+    assert client.get(f"/bank/entries/{first}").status_code == 200
+
+
+def test_textbook_sections_compose_with_filters_and_clear_survives_reimport(bank):
+    _, repo, client = bank
+    question = normalize_question(
+        {
+            "question": "Compute log base 2 of 8",
+            "correct_answer": "3",
+            "difficulty": "medium",
+            "tags": ["教材·必修第一册 §4.3.2 对数的运算"],
+        }
+    )
+    receipt = repo.stage_import("questions.json", "bank", [question])
+    assert repo.commit_import(receipt)["created"] == 1
+
+    response = client.get("/bank/curriculum")
+    assert response.status_code == 200
+    assert [book["id"] for book in response.json()["volumes"]] == ["b1", "b2", "x1", "x2", "x3"]
+    params = {
+        "textbook_section_id": "b1-4.3",
+        "question_type": "short_answer",
+        "difficulty": "medium",
+    }
+    (entry,) = client.get("/bank/entries", params=params).json()["items"]
+    assert entry["textbook_section_id"] == "b1-4.3.2"
+    assert (
+        client.get("/bank/entries", params={**params, "mistakes_only": True}).json()["total"] == 0
+    )
+    assert client.get("/bank/entries", params={"pdf_source_id": "unknown"}).json()["total"] == 0
+
+    entry_url = f"/bank/entries/{entry['id']}"
+    assert client.patch(entry_url, json={"textbook_section_id": "b1"}).status_code == 422
+    assert client.patch(entry_url, json={"textbook_section_id": ""}).status_code == 200
+    receipt = repo.stage_import("questions.json", "bank", [question])
+    assert repo.commit_import(receipt)["duplicates"] == 1
+    assert client.get("/bank/entries", params=params).json()["total"] == 0
+    (entry,) = client.get("/bank/entries", params={"textbook_unassigned": True}).json()["items"]
+    assert entry["textbook_section_id"] == ""
+
+
 def test_duplicate_review_and_two_tabs_cannot_advance_twice(bank):
     store, repo, _ = bank
     entry = seed(store)
@@ -233,6 +293,16 @@ def test_additive_migration_is_idempotent(bank):
     store, repo, _ = bank
     entry = seed(store)
     with repo.connect() as conn:
+        category = conn.execute(
+            "INSERT INTO notebook_categories(name, created_at) VALUES (?, ?)",
+            ("教材·必修第一册 §4.3.2 对数的运算", entry["created_at"]),
+        )
+        conn.execute(
+            "INSERT INTO notebook_entry_categories(entry_id, category_id) VALUES (?, ?)",
+            (entry["id"], category.lastrowid),
+        )
+        conn.execute("DROP INDEX idx_notebook_entries_textbook")
+        conn.execute("ALTER TABLE notebook_entries DROP COLUMN textbook_section_id")
         for trigger in (
             "practice_capture_insert",
             "practice_capture_update",
@@ -244,8 +314,13 @@ def test_additive_migration_is_idempotent(bank):
     state = repo.state(entry["id"])
     assert state["first_wrong_at"] == entry["created_at"]
     restored = asyncio.run(upgraded.get_notebook_entry(entry["id"]))
-    assert {k: v for k, v in restored.items() if k not in {"practice", "categories"}} == entry
-    SQLiteSessionStore(store.db_path)
+    assert restored["textbook_section_id"] == "b1-4.3.2"
+    assert restored["categories"][0]["name"] == "教材·必修第一册 §4.3.2 对数的运算"
+    assert all(
+        restored[key] == value for key, value in entry.items() if key != "textbook_section_id"
+    )
+    restarted = SQLiteSessionStore(store.db_path)
+    assert asyncio.run(restarted.get_notebook_entry(entry["id"])) == restored
     assert repo.state(entry["id"]) == state
     asyncio.run(upgraded.delete_notebook_entry(entry["id"]))
     with repo.connect() as conn:

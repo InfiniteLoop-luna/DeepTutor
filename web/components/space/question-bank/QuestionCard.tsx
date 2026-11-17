@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useTranslation } from "react-i18next";
 import {
   Bookmark,
+  BookOpen,
   CheckCheck,
   ExternalLink,
   MessageSquare,
@@ -13,12 +14,19 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { NotebookCategory, NotebookEntry } from "@/lib/notebook-api";
+import type { NotebookCategory, NotebookEntry, TextbookCatalog } from "@/lib/notebook-api";
+import { pdfImportSourceUrl } from "@/lib/question-bank-pdf-api";
 import { optionIsAnswer, questionResult, questionResultBadge } from "@/lib/question-bank-answers";
 import { bookRoute, masterySessionRoute } from "@/lib/learning-routes";
+import { setPendingPrompt } from "@/lib/pending-prompt";
+import { scopedUrl } from "@/lib/workspace-scope";
 import CategoryMenu from "./CategoryMenu";
 import { practiceMarkdown } from "@/lib/practice-content";
 import Tooltip from "@/shared/ui/Tooltip";
+import { textbookSectionLabel, TextbookSectionOptions } from "./BankCurriculum";
+
+const TEXTBOOK_KB = "北京高中数学教材";
+const TEXTBOOK_CHAT = `/chat?${new URLSearchParams({ capability: "deep_solve", kb: TEXTBOOK_KB })}`;
 
 const SOURCE_LABELS: Record<NotebookEntry["source"], string> = {
   deep_question: "Deep Question",
@@ -76,6 +84,8 @@ interface QuestionCardProps {
   onFile: (categoryId: number) => Promise<boolean>;
   onUnfile: (categoryId: number) => Promise<boolean>;
   onCreateAndFile: (name: string) => Promise<boolean>;
+  curriculum?: TextbookCatalog | null;
+  onAssignTextbook?: (id: string) => Promise<boolean>;
 }
 
 function AnswerBlock({
@@ -147,9 +157,13 @@ export default function QuestionCard({
   onFile,
   onUnfile,
   onCreateAndFile,
+  curriculum,
+  onAssignTextbook,
 }: QuestionCardProps) {
   const { t } = useTranslation();
   const [answersVisible, setAnswersVisible] = useState(!collapseAnswers);
+  const [editingSection, setEditingSection] = useState(false);
+  const textbookLabel = textbookSectionLabel(curriculum ?? null, entry.textbook_section_id ?? "");
   const options = entry.options || {};
   const hasOptions = Object.keys(options).length > 0;
   const isCode = entry.question_type === "coding";
@@ -163,6 +177,7 @@ export default function QuestionCard({
     !entry.session_id.startsWith("reading-notebook:") &&
     !entry.session_id.startsWith("partner-notebook:");
   const independentProvenance =
+    !entry.pdf_sources?.length &&
     !hasConversationSession &&
     entry.source !== "book" &&
     entry.source !== "immersive_reading" &&
@@ -194,6 +209,44 @@ export default function QuestionCard({
         />
 
         <div className="min-w-0 flex-1">
+          {curriculum && onAssignTextbook && (
+            <div className="mb-2.5">
+              {editingSection ? (
+                <div className="flex items-center gap-1.5">
+                  <select
+                    aria-label={t("Textbook section")}
+                    value={entry.textbook_section_id ?? ""}
+                    disabled={disabled}
+                    onChange={async event => {
+                      if (await onAssignTextbook(event.target.value)) setEditingSection(false);
+                    }}
+                    className="min-w-0 max-w-full rounded-md border border-border bg-card px-2 py-1 text-xs"
+                  >
+                    <option value="">{t("Awaiting classification")}</option>
+                    <TextbookSectionOptions catalog={curriculum} />
+                  </select>
+                  <button
+                    type="button"
+                    className="rounded p-1 hover:bg-muted"
+                    aria-label={t("Cancel")}
+                    onClick={() => setEditingSection(false)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  aria-label={`${t("Assign textbook section")} · ${textbookLabel || t("Awaiting classification")}`}
+                  onClick={() => setEditingSection(true)}
+                  className="flex max-w-full items-center gap-1.5 rounded py-0.5 pr-1 text-left text-xs font-medium text-primary hover:underline"
+                >
+                  <BookOpen size={13} className="shrink-0" />
+                  {textbookLabel || t("Awaiting classification")}
+                </button>
+              )}
+            </div>
+          )}
           <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
             <span
               className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${badge.className}`}
@@ -435,34 +488,58 @@ export default function QuestionCard({
             />
           )}
         </details>
+        {textbookLabel && (
+          <Link
+            href={scopedUrl(TEXTBOOK_CHAT)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-primary hover:bg-muted"
+            onClick={() => {
+              const choices = Object.entries(options).map(([key, value]) => `${key}. ${value}`);
+              setPendingPrompt(
+                [
+                  t(
+                    "Solve this problem using the textbook section {{section}}. Retrieve and cite the relevant definitions, formulas or examples first. If the problem relies on a missing diagram or a condition is missing, ask me to supply it.",
+                    { section: textbookLabel },
+                  ),
+                  entry.question,
+                  ...choices,
+                ].join("\n\n"),
+              );
+            }}
+          >
+            <BookOpen size={13} />
+            {t("Solve with textbook")}
+          </Link>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
           <div className="flex flex-wrap items-center gap-1.5">
-            {filed.map(category => (
-              <span
-                key={category.id}
-                className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 py-0.5 pl-2 pr-1 text-[var(--muted-foreground)]"
-              >
-                {category.name}
-                <Tooltip label={t("Remove tag")}>
-                  <button
-                    type="button"
-                    onClick={() => void onUnfile(category.id)}
-                    disabled={disabled}
-                    aria-label={t("Remove tag")}
-                    className="rounded p-0.5 transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-40"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </Tooltip>
-              </span>
-            ))}
+            {filed
+              .filter(category => !textbookLabel || !category.name.startsWith("教材·"))
+              .map(category => (
+                <span
+                  key={category.id}
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 py-0.5 pl-2 pr-1 text-[var(--muted-foreground)]"
+                >
+                  {category.name}
+                  <Tooltip label={t("Remove tag")}>
+                    <button
+                      type="button"
+                      onClick={() => void onUnfile(category.id)}
+                      disabled={disabled}
+                      aria-label={t("Remove tag")}
+                      className="rounded p-0.5 transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-40"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </Tooltip>
+                </span>
+              ))}
             {hasConversationSession && entry.source !== "import" && (
               <Link
                 href={
                   entry.source === "mastery_path" && (entry.mastery_path_id || entry.material_id)
                     ? masterySessionRoute(
                         entry.mastery_path_id || entry.material_id,
-                        entry.session_id
+                        entry.session_id,
                       )
                     : `/chat/${encodeURIComponent(entry.session_id)}`
                 }
@@ -477,6 +554,20 @@ export default function QuestionCard({
                 {independentProvenance}
               </span>
             )}
+            {entry.pdf_sources?.map(source => (
+              <a
+                key={`${source.document_id}:${source.page}:${source.number}`}
+                href={`${pdfImportSourceUrl(source.document_id)}#page=${source.page}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-primary hover:bg-muted"
+              >
+                <ExternalLink size={10} className="shrink-0" />
+                <span className="max-w-[15rem] truncate">{source.filename}</span>
+                {t("PDF p. {{page}}", { page: source.page })}
+                {source.number && ` · ${t("No. {{number}}", { number: source.number })}`}
+              </a>
+            ))}
             {entry.source === "book" && entry.material_id && (
               <Link
                 href={bookRoute(entry.material_id, entry.section_id)}

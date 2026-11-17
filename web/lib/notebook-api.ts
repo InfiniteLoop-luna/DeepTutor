@@ -228,6 +228,8 @@ export interface NotebookEntry {
   result?: AssessmentResult;
   mastery_path_id?: string;
   knowledge_point_id?: string;
+  textbook_section_id?: string;
+  pdf_sources?: QuestionPdfSource[];
   attempt_count?: number;
   hints_used?: number;
   confidence?: number | null;
@@ -283,6 +285,41 @@ export interface QuestionBankMaterial {
   unresolved_count: number;
 }
 
+export interface QuestionPdfSource {
+  document_id: string;
+  filename: string;
+  page: number;
+  end_page?: number;
+  number: string;
+}
+
+export interface TextbookSection {
+  id: string;
+  number: string;
+  title: string;
+}
+
+export interface TextbookChapter extends TextbookSection {
+  sections: TextbookSection[];
+}
+
+export interface TextbookVolume {
+  id: string;
+  title: string;
+  chapters: TextbookChapter[];
+}
+
+export interface TextbookCatalog {
+  edition: string;
+  volumes: TextbookVolume[];
+}
+
+export async function getTextbookCatalog(): Promise<TextbookCatalog> {
+  return expectJson<TextbookCatalog>(
+    await apiFetch(apiUrl("/api/question-notebook/curriculum"), { cache: "no-store" }),
+  );
+}
+
 export interface NotebookEntryListResponse {
   items: NotebookEntry[];
   total: number;
@@ -320,6 +357,11 @@ export interface NotebookEntryFilter {
   result?: AssessmentResult;
   mastery_path_id?: string;
   knowledge_point_id?: string;
+  textbook_section_id?: string;
+  textbook_unassigned?: boolean;
+  question_type?: string;
+  difficulty?: string;
+  pdf_source_id?: string;
   resolved?: boolean;
   score_trend?: ScoreTrend;
   search?: string;
@@ -350,6 +392,11 @@ export async function listNotebookEntries(
     params.set("mastery_path_id", filter.mastery_path_id);
   if (filter.knowledge_point_id)
     params.set("knowledge_point_id", filter.knowledge_point_id);
+  if (filter.textbook_section_id) params.set("textbook_section_id", filter.textbook_section_id);
+  if (filter.textbook_unassigned) params.set("textbook_unassigned", "true");
+  if (filter.question_type) params.set("question_type", filter.question_type);
+  if (filter.difficulty) params.set("difficulty", filter.difficulty);
+  if (filter.pdf_source_id) params.set("pdf_source_id", filter.pdf_source_id);
   if (filter.resolved !== undefined)
     params.set("resolved", String(filter.resolved));
   if (filter.score_trend) params.set("score_trend", filter.score_trend);
@@ -425,6 +472,7 @@ export async function updateNotebookEntry(
     followup_session_id?: string;
     ai_judgment?: string;
     resolved?: boolean;
+    textbook_section_id?: string;
   },
 ): Promise<void> {
   const response = await apiFetch(

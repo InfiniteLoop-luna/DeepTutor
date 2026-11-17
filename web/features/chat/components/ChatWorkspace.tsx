@@ -1480,6 +1480,7 @@ export default function ChatWorkspace() {
     // Capability identity is backend-owned. Do not resolve a deep link against
     // the temporary chat-only fallback while the catalog request is in flight.
     if (intent.capability !== null && isCapabilityCatalogLoading) return;
+    if (intent.knowledgeBase && !knowledgeBasesLoaded) return;
     launchIntentAppliedRef.current = true;
     if (intent.capability !== null) handleSelectCapability(intent.capability);
     else if (intent.tools.length) {
@@ -1488,8 +1489,14 @@ export default function ChatWorkspace() {
       );
       if (valid.length) setTools(Array.from(new Set(valid)));
     }
+    if (intent.knowledgeBase) {
+      const source = knowledgeBases.find(
+        kb => kb.name === intent.knowledgeBase && kb.metadata?.type !== "subagent",
+      );
+      if (source) setKBs([knowledgeBaseRef(source)]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCapabilityCatalogLoading]);
+  }, [isCapabilityCatalogLoading, knowledgeBasesLoaded]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

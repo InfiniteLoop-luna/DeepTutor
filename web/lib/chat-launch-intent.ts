@@ -14,6 +14,8 @@ export interface ChatLaunchIntent {
   capability: string | null;
   /** Raw `tool` values — the caller filters these against its registry. */
   tools: string[];
+  /** Display name of a knowledge base already available to this workspace. */
+  knowledgeBase?: string;
 }
 
 const EMPTY_INTENT: ChatLaunchIntent = {
@@ -26,8 +28,10 @@ export function readChatLaunchIntent(search: string): ChatLaunchIntent {
   if (!search) return { ...EMPTY_INTENT };
   const params = new URLSearchParams(search);
   const capability = params.get("capability");
+  const knowledgeBase = params.get("kb")?.trim();
   return {
     capability: capability === null ? null : capability.trim(),
     tools: params.getAll("tool").map((tool) => tool.trim()),
+    ...(knowledgeBase ? { knowledgeBase } : {}),
   };
 }
