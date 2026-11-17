@@ -21,6 +21,7 @@ def _agent(monkeypatch: pytest.MonkeyPatch, responses: list[str]) -> CodeGenerat
         ),
     }
     monkeypatch.setattr(agent, "get_max_retries", lambda: 1)
+    monkeypatch.setattr(agent, "get_model", lambda: "gpt-5")
 
     async def fake_stream_llm(**_kwargs) -> AsyncIterator[str]:
         yield responses.pop(0)
@@ -149,11 +150,22 @@ async def test_truncated_generation_grows_the_budget_and_asks_for_less_reasoning
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["generation", "repair"])
+@pytest.mark.parametrize(
+    ("model", "expected_efforts"),
+    [
+        ("gpt-5", [None, RETRY_REASONING_EFFORT]),
+        ("deepseek-flash", ["none", "none"]),
+        ("deepseek/deepseek-v4-flash", ["none", "none"]),
+    ],
+)
 async def test_truncated_reasoning_only_response_recovers_with_less_reasoning(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
+    model: str,
+    expected_efforts: list[str | None],
 ) -> None:
     agent = _agent(monkeypatch, [])
+    monkeypatch.setattr(agent, "get_model", lambda: model)
     monkeypatch.setattr(agent, "get_max_tokens", lambda: 8000)
     calls: list[dict[str, object]] = []
 
@@ -194,7 +206,7 @@ async def test_truncated_reasoning_only_response_recovers_with_less_reasoning(
         )
 
     assert generated.code == "from manim import Scene"
-    assert [call["reasoning_effort"] for call in calls] == [None, RETRY_REASONING_EFFORT]
+    assert [call["reasoning_effort"] for call in calls] == expected_efforts
     assert [call["max_tokens"] for call in calls] == [8000, 12000]
 
 

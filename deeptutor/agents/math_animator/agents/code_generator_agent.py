@@ -22,6 +22,7 @@ from ..utils import (
 #: How much of a failed response to keep in the debug log. Enough to see where
 #: a truncated generation stopped, short enough to stay readable (#1545).
 _RAW_EXCERPT_CHARS = 200
+_DEEPSEEK_FLASH_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash"})
 
 
 class GeneratedCodeOutputError(ValueError):
@@ -164,12 +165,16 @@ class CodeGeneratorAgent(BaseAgent):
         output cap, and a reasoning model that spent the whole budget on
         chain-of-thought fails that way every time on the same request (#1547),
         so a truncated attempt is retried with a larger budget and lower
-        reasoning effort. Whichever way the attempt failed, the
+        reasoning effort. For DeepSeek Flash, leave thinking off for
+        code generation and repair to reserve the budget for JSON. The
         reason reaches both the log and the raised error (#1545).
         """
 
         max_retries = max(0, int(self.get_max_retries()))
         base_max_tokens = max(0, int(self.get_max_tokens() or 0))
+        model = self.get_model()
+        model_name = model.lower().rsplit("/", 1)[-1].partition(":")[0]
+        flash_effort = "none" if model_name in _DEEPSEEK_FLASH_MODELS else None
         attempts = max_retries + 1
         last_error: Exception | None = None
         last_failure = ""
@@ -185,8 +190,10 @@ class CodeGeneratorAgent(BaseAgent):
                 user_prompt=user_prompt + retry_instruction,
                 system_prompt=system_prompt,
                 response_format={"type": "json_object"},
+                model=model,
                 max_tokens=max_tokens or None,
-                reasoning_effort=(RETRY_REASONING_EFFORT if structured_attempt else None),
+                reasoning_effort=flash_effort
+                or (RETRY_REASONING_EFFORT if structured_attempt else None),
                 stage=stage,
                 trace_meta=build_trace_metadata(
                     call_id=new_call_id(call_id_prefix),

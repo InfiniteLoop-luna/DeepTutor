@@ -344,9 +344,10 @@ async def test_geometry_probe_timeout_preserves_rendered_video(monkeypatch):
     manager = CodeRetryManager(
         renderer=Renderer(), repair_callback=repair, review_callback=review, max_retries=0
     )
-    # Keep the real production timeout ordering, at a faster test scale.
+    # Check the production ordering, then allow time for temp-file setup and
+    # Windows event-loop scheduling around the shortened probe timeout.
     assert layout_probe.PROBE_TIMEOUT_S < manager.review_timeout_seconds
-    manager.review_timeout_seconds /= 1000
+    manager.review_timeout_seconds = 2
     monkeypatch.setattr(layout_probe, "PROBE_TIMEOUT_S", layout_probe.PROBE_TIMEOUT_S / 1000)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
     _, result = await manager.render_with_retries(

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import threading
 from typing import Awaitable, Callable
 
@@ -65,10 +67,25 @@ class ManimRenderService:
         source_path.write_text(code, encoding="utf-8")
         await self._emit_progress(f"Saved generated code to {source_name}.", raw=True)
 
-        if output_mode == "image":
-            artifacts = await self._render_image_blocks(code=code, quality=quality)
-        else:
-            artifacts = [await self._render_video(code_path=source_path, quality=quality)]
+        with ExitStack() as stack:
+            media_dir = self.media_dir
+            # Manim appends scene and partial-movie paths under this root.
+            if os.name == "nt" and len(str(media_dir)) > 120:
+                media_dir = Path(
+                    stack.enter_context(
+                        TemporaryDirectory(prefix="dtmanim-", ignore_cleanup_errors=True)
+                    )
+                )
+            if output_mode == "image":
+                artifacts = await self._render_image_blocks(
+                    code=code, quality=quality, media_dir=media_dir
+                )
+            else:
+                artifacts = [
+                    await self._render_video(
+                        code_path=source_path, quality=quality, media_dir=media_dir
+                    )
+                ]
 
         source_code_path = str(source_path)
         if self.workspace_root is not None:
@@ -80,20 +97,28 @@ class ManimRenderService:
             quality=quality,
         )
 
-    async def _render_video(self, *, code_path: Path, quality: str) -> RenderedArtifact:
+    async def _render_video(
+        self, *, code_path: Path, quality: str, media_dir: Path
+    ) -> RenderedArtifact:
         scene_name = self._extract_scene_name(code_path.read_text(encoding="utf-8"))
         await self._emit_progress(f"Launching Manim scene `{scene_name}`.")
         await self._run_manim(
-            code_path=code_path, scene_name=scene_name, quality=quality, save_last_frame=False
+            code_path=code_path,
+            scene_name=scene_name,
+            quality=quality,
+            save_last_frame=False,
+            media_dir=media_dir,
         )
-        video_file = self._find_rendered_file(".mp4")
+        video_file = self._find_rendered_file(".mp4", media_dir)
         target_name = slugify_filename(f"{self.turn_id}-{scene_name}.mp4", f"{self.turn_id}.mp4")
         artifact_path = self.artifacts_dir / target_name
         artifact_path.write_bytes(video_file.read_bytes())
         await self._emit_progress(f"Saved rendered video as {artifact_path.name}.")
         return self._build_artifact(artifact_path, "video", "video/mp4", "Animation video")
 
-    async def _render_image_blocks(self, *, code: str, quality: str) -> list[RenderedArtifact]:
+    async def _render_image_blocks(
+        self, *, code: str, quality: str, media_dir: Path
+    ) -> list[RenderedArtifact]:
         matches = list(YON_IMAGE_PATTERN.finditer(code))
         if not matches:
             raise ManimRenderError(
@@ -118,8 +143,9 @@ class ManimRenderService:
                 scene_name=scene_name,
                 quality=quality,
                 save_last_frame=True,
+                media_dir=media_dir,
             )
-            image_file = self._find_rendered_file(".png")
+            image_file = self._find_rendered_file(".png", media_dir)
             artifact_path = self.artifacts_dir / f"image-{idx:02d}.png"
             artifact_path.write_bytes(image_file.read_bytes())
             await self._emit_progress(f"Saved image artifact {artifact_path.name}.")
@@ -140,6 +166,7 @@ class ManimRenderService:
         scene_name: str,
         quality: str,
         save_last_frame: bool,
+        media_dir: Path,
     ) -> None:
         quality_flag = QUALITY_FLAG_MAP.get(quality, "-qm")
         command = [
@@ -150,7 +177,7 @@ class ManimRenderService:
             str(code_path),
             scene_name,
             "--media_dir",
-            str(self.media_dir),
+            str(media_dir),
             "--progress_bar",
             "none",
         ]
@@ -233,16 +260,17 @@ class ManimRenderService:
             return
         await self.progress_callback(message, raw)
 
-    def _find_rendered_file(self, suffix: str) -> Path:
+    @staticmethod
+    def _find_rendered_file(suffix: str, media_dir: Path) -> Path:
         # Manim stores many transient chunks under ``partial_movie_files``.
         # We only want the final exported artifact for the scene.
         matches = [
             path
-            for path in self.media_dir.rglob(f"*{suffix}")
+            for path in media_dir.rglob(f"*{suffix}")
             if "partial_movie_files" not in path.parts
         ]
         if not matches:
-            matches = list(self.media_dir.rglob(f"*{suffix}"))
+            matches = list(media_dir.rglob(f"*{suffix}"))
         if not matches:
             raise ManimRenderError(f"Rendered {suffix} artifact not found.")
         return max(matches, key=lambda path: path.stat().st_mtime)
