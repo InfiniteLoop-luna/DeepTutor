@@ -1,5 +1,5 @@
 {
-  "fingerprint": "ea6bf822a4b2984e63efdebf009fb35d587985133ecad4fbca15e0e1be5ba9ab",
+  "fingerprint": "c717d951294c7d7eb7981aac611baf7c89a59a2306872195c230cbc93e63a692",
   "routers": {
     "deeptutor.api.routers.auth:router": [
       {
@@ -3541,6 +3541,72 @@
         "kind": "http",
         "methods": [
           "POST"
+        ]
+      }
+    ],
+    "deeptutor.api.routers.question_lesson:router": [
+      {
+        "path": "/solve",
+        "name": "solve_pasted_question",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{entry_id}",
+        "name": "get_question_lesson",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "/{entry_id}/solve",
+        "name": "solve_question_lesson",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{entry_id}",
+        "name": "create_question_lesson",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{entry_id}/{version}/narration",
+        "name": "start_question_lesson_narration",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{entry_id}/{version}/scenes/{scene_id}/narration",
+        "name": "retry_question_lesson_scene",
+        "kind": "http",
+        "methods": [
+          "POST"
+        ]
+      },
+      {
+        "path": "/{entry_id}/{version}/audio/{beat_id}/{recording}",
+        "name": "get_question_lesson_audio",
+        "kind": "http",
+        "methods": [
+          "GET"
+        ]
+      },
+      {
+        "path": "/{entry_id}/{version}/figure",
+        "name": "get_question_lesson_figure",
+        "kind": "http",
+        "methods": [
+          "GET"
         ]
       }
     ],

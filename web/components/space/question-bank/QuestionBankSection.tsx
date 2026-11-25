@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, ClipboardList, Inbox, Loader2, Search } from "lucide-react";
+import { AlertTriangle, ClipboardList, Inbox, Loader2, Search, Sparkles } from "lucide-react";
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
 import BankCurriculum from "./BankCurriculum";
 import BankSelectionBar from "./BankSelectionBar";
@@ -11,6 +12,11 @@ import CategoryManager from "./CategoryManager";
 import QuestionCard from "./QuestionCard";
 import { SavePracticeSet } from "./PracticeSets";
 import { useQuestionBank } from "./useQuestionBank";
+
+const QuestionLessonDialog = dynamic(
+  () => import("@/components/video-lesson/QuestionLessonDialog"),
+  { ssr: false },
+);
 
 function EmptyState({
   icon: Icon,
@@ -53,6 +59,7 @@ export default function QuestionBankSection({
     onChanged?.();
   }, [bank.stats, onChanged]);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   const selectedIds = bank.items.filter(item => bank.selectedIds.has(item.id)).map(item => item.id);
   const searching = bank.searchInput.trim().length > 0;
@@ -92,24 +99,42 @@ export default function QuestionBankSection({
                 ? t("Loading…")
                 : t("{{count}} matching questions", { count: bank.total })}
             </p>
-            {onPractice && (
-              <div className="flex flex-wrap items-center gap-2">
-                <SavePracticeSet ids={selectedIds} onSaved={bank.clearSelection} />
+            <div className="flex flex-wrap items-center gap-2">
+              {!mistakesOnly && !pdfSourceId && (
                 <button
                   type="button"
-                  disabled={bank.loading || bank.refreshing || !bank.items.length}
-                  onClick={() =>
-                    onPractice(selectedIds.length ? selectedIds : bank.items.map(item => item.id))
-                  }
-                  className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-40"
+                  onClick={() => setPasteOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10"
                 >
-                  {selectedIds.length
-                    ? t("Practice selected ({{count}})", { count: selectedIds.length })
-                    : t("Practice this page")}
+                  <Sparkles size={15} />
+                  {t("Paste a question to solve")}
                 </button>
-              </div>
-            )}
+              )}
+              {onPractice && (
+                <>
+                  <SavePracticeSet ids={selectedIds} onSaved={bank.clearSelection} />
+                  <button
+                    type="button"
+                    disabled={bank.loading || bank.refreshing || !bank.items.length}
+                    onClick={() =>
+                      onPractice(selectedIds.length ? selectedIds : bank.items.map(item => item.id))
+                    }
+                    className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-40"
+                  >
+                    {selectedIds.length
+                      ? t("Practice selected ({{count}})", { count: selectedIds.length })
+                      : t("Practice this page")}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+          {pasteOpen && (
+            <QuestionLessonDialog
+              onClose={() => setPasteOpen(false)}
+              onQuestionSaved={() => void bank.refresh()}
+            />
+          )}
 
           <BankToolbar
             search={bank.searchInput}

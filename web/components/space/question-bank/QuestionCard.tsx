@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import MarkdownRenderer from "@/components/common/MarkdownRenderer";
 import Link from "next/link";
 import { useTranslation } from "react-i18next";
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   MessageSquare,
   RotateCcw,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -27,6 +29,12 @@ import { textbookSectionLabel, TextbookSectionOptions } from "./BankCurriculum";
 
 const TEXTBOOK_KB = "北京高中数学教材";
 const TEXTBOOK_CHAT = `/chat?${new URLSearchParams({ capability: "deep_solve", kb: TEXTBOOK_KB })}`;
+const QuestionLessonDialog = dynamic(
+  () => import("@/components/video-lesson/QuestionLessonDialog"),
+  {
+    ssr: false,
+  },
+);
 
 const SOURCE_LABELS: Record<NotebookEntry["source"], string> = {
   deep_question: "Deep Question",
@@ -162,6 +170,7 @@ export default function QuestionCard({
 }: QuestionCardProps) {
   const { t } = useTranslation();
   const [answersVisible, setAnswersVisible] = useState(!collapseAnswers);
+  const [lessonOpen, setLessonOpen] = useState(false);
   const [editingSection, setEditingSection] = useState(false);
   const textbookLabel = textbookSectionLabel(curriculum ?? null, entry.textbook_section_id ?? "");
   const options = entry.options || {};
@@ -488,27 +497,41 @@ export default function QuestionCard({
             />
           )}
         </details>
-        {textbookLabel && (
-          <Link
-            href={scopedUrl(TEXTBOOK_CHAT)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-primary hover:bg-muted"
-            onClick={() => {
-              const choices = Object.entries(options).map(([key, value]) => `${key}. ${value}`);
-              setPendingPrompt(
-                [
-                  t(
-                    "Solve this problem using the textbook section {{section}}. Retrieve and cite the relevant definitions, formulas or examples first. If the problem relies on a missing diagram or a condition is missing, ask me to supply it.",
-                    { section: textbookLabel },
-                  ),
-                  entry.question,
-                  ...choices,
-                ].join("\n\n"),
-              );
-            }}
+        <div className="flex flex-wrap items-center gap-2">
+          {textbookLabel && (
+            <Link
+              href={scopedUrl(TEXTBOOK_CHAT)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-primary hover:bg-muted"
+              onClick={() => {
+                const choices = Object.entries(options).map(([key, value]) => `${key}. ${value}`);
+                setPendingPrompt(
+                  [
+                    t(
+                      "Solve this problem using the textbook section {{section}}. Retrieve and cite the relevant definitions, formulas or examples first. If the problem relies on a missing diagram or a condition is missing, ask me to supply it.",
+                      { section: textbookLabel },
+                    ),
+                    entry.question,
+                    ...choices,
+                  ].join("\n\n"),
+                );
+              }}
+            >
+              <BookOpen size={13} />
+              {t("Solve with textbook")}
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setLessonOpen(true)}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-primary hover:bg-muted disabled:opacity-50"
           >
-            <BookOpen size={13} />
-            {t("Solve with textbook")}
-          </Link>
+            <Sparkles size={13} />
+            {t("AI illustrated solution")}
+          </button>
+        </div>
+        {lessonOpen && (
+          <QuestionLessonDialog entryId={entry.id} onClose={() => setLessonOpen(false)} />
         )}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
           <div className="flex flex-wrap items-center gap-1.5">

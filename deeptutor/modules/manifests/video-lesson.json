@@ -5,7 +5,8 @@
   "requires": [],
   "optional": [],
   "paths": [
-    "deeptutor/agents/video_lesson"
+    "deeptutor/agents/video_lesson",
+    "deeptutor/api/routers/question_lesson.py"
   ],
   "capabilities": {
     "video_lesson": {
@@ -29,7 +30,19 @@
   },
   "loops": {},
   "tools": {},
-  "routes": [],
+  "routes": [
+    {
+      "reference": "deeptutor.api.routers.question_lesson:router",
+      "options": {
+        "prefix": "/api/question-notebook/practice/question-lessons",
+        "tags": [
+          "question-lessons"
+        ]
+      },
+      "auth": "learning",
+      "order": 697
+    }
+  ],
   "commands": [],
   "navigation": [],
   "services": [],

@@ -37,6 +37,7 @@
     "@blocknote/core": "0.56.0",
     "@blocknote/react": "0.56.0",
     "@recogito/text-annotator": "4.2.5",
+    "@remotion/player": "4.0.537",
     "chart.js": "^4.5.1",
     "clsx": "^2.1.1",
     "cytoscape": "^3.33.1",
@@ -64,6 +65,7 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
+    "remotion": "4.0.537",
     "tailwind-merge": "^3.4.0"
   },
   "overrides": {
